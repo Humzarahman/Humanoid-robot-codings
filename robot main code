@@ -1,0 +1,418 @@
+// Include the library for servos and drivers
+#include <Wire.h>
+#include <Servo.h>
+#include <Adafruit_PWMServoDriver.h>
+
+// PWM driver used for the hands
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// Define the pulse length range for hands servos
+#define SERVOMIN 150  // Minimum pulse length count (0°)
+#define SERVOMAX 600  // Maximum pulse length count (180°)
+
+// Define servo pins of the hands that uses PWM drivers
+// RTh=0, RT=1, RI=2, RM=3, RR=4, RP=5
+// LTh=6, LT=7, LI=8, LM=9, LR=10, LP=11
+int hand[12] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+// Define the servos attached in the entire arms
+// Wrist, Elbow, Upper_Arm, Shoulder, Arm, Core mentioned as L(x) and R(x) for left and right arm
+Servo RW; Servo RE; Servo RU; Servo RS; Servo RA; Servo RC;
+Servo LW; Servo LE; Servo LU; Servo LS; Servo LA; Servo LC;
+Servo Neck; Servo Cam;
+
+// Motors Direction & Speed
+#define MRD 33
+#define MRS 34
+#define MLD 35
+#define MLS 36
+
+char currentMode = 'B';
+int motorSpeed = 0;
+int neckAngle = 120;
+int camAngle  = 0;
+
+// Arm angles - initialized to starting positions
+int lwAngle = 90, leAngle = 10, luAngle = 90, lsAngle = 90, laAngle = 70, lcAngle = 100;
+int rwAngle = 90, reAngle = 150, ruAngle = 70, rsAngle = 90, raAngle = 125, rcAngle = 80;
+
+// Hand finger angles (0=closed, 180=open)
+int fingerAngles[12] = {180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180};
+
+void setup() {
+  // Start serial communication for debugging
+  Serial.begin(115200);
+  Serial.println("START HUMANOID ROBOT PROGRAM");
+
+  // Initialize motors setup
+  pinMode(MRD, OUTPUT);
+  pinMode(MRS, OUTPUT);
+  pinMode(MLD, OUTPUT);
+  pinMode(MLS, OUTPUT);
+
+  // Initialize the PCA9685 drivers & set the PWM frequency to 60Hz
+  pwm.begin();
+  pwm.setPWMFreq(60);
+  
+  // Arm pins and initialize posture
+  RW.attach(37); RW.write(rwAngle); // 0  ~ 180
+  RE.attach(38); RE.write(reAngle); // 10 ~ 150
+  RU.attach(39); RU.write(ruAngle); // 0  ~ 180
+  RS.attach(40); RS.write(rsAngle); // 90 ~ 150
+  RA.attach(41); RA.write(raAngle); // 0  ~ 180
+  RC.attach(42); RC.write(rcAngle); // 30 ~ 150
+
+  LW.attach(43); LW.write(lwAngle); // 0  ~ 180
+  LE.attach(44); LE.write(leAngle); // 10 ~ 150
+  LU.attach(45); LU.write(luAngle); // 0  ~ 180
+  LS.attach(46); LS.write(lsAngle); // 30 ~ 90
+  LA.attach(47); LA.write(laAngle); // 0  ~ 180
+  LC.attach(48); LC.write(lcAngle); // 30 ~ 150
+
+  Neck.attach(49); Neck.write(neckAngle); // 0 ~ 180
+  Cam.attach(50); Cam.write(camAngle);    // 10 ~ 90
+  
+  openRightHand();
+  openLeftHand();
+}
+
+void loop() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    handleCommand(cmd);
+  }
+}
+
+/* ================= COMMAND HANDLER ================= */
+
+void handleCommand(String cmd) {
+  if (cmd == "MODE_N") currentMode = 'N';
+  else if (cmd == "MODE_B") currentMode = 'B';
+  else if (cmd == "MODE_V") currentMode = 'V';
+  else if (cmd == "END") exitProgram();
+  else if (cmd == "SHAKE_R") { handshakeRight(); return; }
+  else if (cmd == "SHAKE_L") { handshakeLeft();  return; }
+
+  if (currentMode == 'B'){
+    // Motor movement (Mode B)
+    if (cmd == "w") moveForward();
+    else if (cmd == "s") moveBackward();
+    else if (cmd == "a") moveLeft();
+    else if (cmd == "d") moveRight();
+
+    // Motor speed (Mode B)
+    else if (cmd == "S0") motorSpeed = 0;
+    else if (cmd == "S1") motorSpeed = 85;
+    else if (cmd == "S2") motorSpeed = 170;
+    else if (cmd == "S3") motorSpeed = 255;
+
+    // Head movement (Mode B)
+    else if (cmd == "i") lookUp();
+    else if (cmd == "k") lookDown();
+    else if (cmd == "j") lookLeft();
+    else if (cmd == "l") lookRight();
+  }
+
+  else if (currentMode == 'N'){
+    // Mode N: Hands - Close fingers (numbers)
+    if (cmd == "1") closeFinger(11);  // L Pinky
+    else if (cmd == "2") closeFinger(10); // L Ring
+    else if (cmd == "3") closeFinger(9);  // L Middle
+    else if (cmd == "4") closeFinger(8);  // L Index
+    else if (cmd == "5") closeFinger(7);  // L Thumb
+    else if (cmd == "6") closeFinger(6);  // L Thenar
+    else if (cmd == "7") closeFinger(0);  // R Thenar
+    else if (cmd == "8") closeFinger(1);  // R Thumb
+    else if (cmd == "9") closeFinger(2);  // R Index
+    else if (cmd == "0") closeFinger(3);  // R Middle
+    else if (cmd == "[") closeFinger(4);  // R Ring
+    else if (cmd == "]") closeFinger(5);  // R Pinky
+
+    // Mode N: Hands - Open fingers (shift + numbers)
+    else if (cmd == "q") openFinger(11);   // L Pinky
+    else if (cmd == "w") openFinger(10);  // L Ring
+    else if (cmd == "e") openFinger(9);   // L Middle
+    else if (cmd == "r") openFinger(8);   // L Index
+    else if (cmd == "t") openFinger(7);   // L Thumb
+    else if (cmd == "g") openFinger(6);   // L Thenar
+    else if (cmd == "h") openFinger(0);   // R Thenar
+    else if (cmd == "y") openFinger(1);   // R Thumb
+    else if (cmd == "u") openFinger(2);   // R Index
+    else if (cmd == "i") openFinger(3);   // R Middle
+    else if (cmd == "o") openFinger(4);   // R Ring
+    else if (cmd == "p") openFinger(5);   // R Pinky
+
+    else if (cmd == "a") openLeftHand();
+    else if (cmd == "s") closeLeftHand();
+    else if (cmd == "d") openRightHand();
+    else if (cmd == "f") closeRightHand();
+  }
+  
+  else if (currentMode == 'V'){
+    // Mode V: Arms - Decrease angle (numbers)
+    if (cmd == "1") decreaseArm(&lwAngle, LW, 0, 180);    // L Wrist
+    else if (cmd == "2") decreaseArm(&leAngle, LE, 10, 150);   // L Elbow
+    else if (cmd == "3") decreaseArm(&luAngle, LU, 0, 180);    // L UpperArm
+    else if (cmd == "4") decreaseArm(&lsAngle, LS, 30, 90);    // L Shoulder
+    else if (cmd == "5") decreaseArm(&laAngle, LA, 0, 180);    // L Arm
+    else if (cmd == "6") decreaseArm(&lcAngle, LC, 30, 150);   // L Core
+    else if (cmd == "7") decreaseArm(&rcAngle, RC, 30, 150);   // R Core
+    else if (cmd == "8") decreaseArm(&raAngle, RA, 0, 180);    // R Arm
+    else if (cmd == "9") decreaseArm(&rsAngle, RS, 90, 150);   // R Shoulder
+    else if (cmd == "0") decreaseArm(&ruAngle, RU, 0, 180);    // R UpperArm
+    else if (cmd == "[") decreaseArm(&reAngle, RE, 10, 150);   // R Elbow
+    else if (cmd == "]") decreaseArm(&rwAngle, RW, 0, 180);    // R Wrist
+
+    // Mode V: Arms - Increase angle (shift + numbers)
+    else if (cmd == "q") increaseArm(&lwAngle, LW, 0, 180);    // L Wrist
+    else if (cmd == "w") increaseArm(&leAngle, LE, 10, 150);   // L Elbow
+    else if (cmd == "e") increaseArm(&luAngle, LU, 0, 180);    // L UpperArm
+    else if (cmd == "r") increaseArm(&lsAngle, LS, 30, 90);    // L Shoulder
+    else if (cmd == "t") increaseArm(&laAngle, LA, 0, 180);    // L Arm
+    else if (cmd == "g") increaseArm(&lcAngle, LC, 30, 150);   // L Core
+    else if (cmd == "h") increaseArm(&rcAngle, RC, 30, 150);   // R Core
+    else if (cmd == "y") increaseArm(&raAngle, RA, 0, 180);    // R Arm
+    else if (cmd == "u") increaseArm(&rsAngle, RS, 90, 150);   // R Shoulder
+    else if (cmd == "i") increaseArm(&ruAngle, RU, 0, 180);    // R UpperArm
+    else if (cmd == "o") increaseArm(&reAngle, RE, 10, 150);   // R Elbow
+    else if (cmd == "p") increaseArm(&rwAngle, RW, 0, 180);    // R Wrist
+  }
+}
+
+/* ================= MOTORS ================= */
+
+void moveForward() {
+  digitalWrite(MRD, HIGH);
+  digitalWrite(MLD, HIGH);
+  analogWrite(MRS, motorSpeed);
+  analogWrite(MLS, motorSpeed);
+}
+
+void moveBackward() {
+  digitalWrite(MRD, LOW);
+  digitalWrite(MLD, LOW);
+  analogWrite(MRS, motorSpeed);
+  analogWrite(MLS, motorSpeed);
+}
+
+void moveLeft() {
+  digitalWrite(MRD, LOW);
+  digitalWrite(MLD, HIGH);
+  analogWrite(MRS, motorSpeed);
+  analogWrite(MLS, motorSpeed);
+}
+
+void moveRight() {
+  digitalWrite(MRD, HIGH);
+  digitalWrite(MLD, LOW);
+  analogWrite(MRS, motorSpeed);
+  analogWrite(MLS, motorSpeed);
+}
+
+/* ================= HEAD ================= */
+
+void lookUp() {
+  camAngle = max(0, camAngle - 2);
+  Cam.write(camAngle);
+}
+void lookDown() {
+  camAngle = min(90, camAngle + 2);
+  Cam.write(camAngle);
+}
+void lookLeft() {
+  neckAngle = max(0, neckAngle - 2);
+  Neck.write(neckAngle);
+}
+void lookRight() {
+  neckAngle = min(180, neckAngle + 2);
+  Neck.write(neckAngle);
+}
+
+/* ================= HANDS & ARMS - INDIVIDUAL FINGERS ================= */
+
+void openFinger(int fingerIndex) {
+  fingerAngles[fingerIndex] = min(180, fingerAngles[fingerIndex] + 10);
+  pwm.setPWM(hand[fingerIndex], 0, angleToPulse(fingerAngles[fingerIndex]));
+}
+
+void closeFinger(int fingerIndex) {
+  fingerAngles[fingerIndex] = max(0, fingerAngles[fingerIndex] - 10);
+  pwm.setPWM(hand[fingerIndex], 0, angleToPulse(fingerAngles[fingerIndex]));
+}
+
+void increaseArm(int* angle, Servo& servo, int minAngle, int maxAngle) {
+  *angle = min(maxAngle, *angle + 3);
+  servo.write(*angle);
+}
+
+void decreaseArm(int* angle, Servo& servo, int minAngle, int maxAngle) {
+  *angle = max(minAngle, *angle - 3);
+  servo.write(*angle);
+}
+
+/* ================= HANDS ================= */
+
+void openRightHand(){
+  pwm.setPWM(hand[1], 0, angleToPulse(180));
+  delay(500);
+  pwm.setPWM(hand[0], 0, angleToPulse(180));
+  delay(500);
+  for (int i = 2; i <= 5; i++) {
+    pwm.setPWM(hand[i], 0, angleToPulse(180));
+    delay(500);
+  }
+}
+
+void openLeftHand(){
+  pwm.setPWM(hand[7], 0, angleToPulse(180));
+  delay(1000);
+  pwm.setPWM(hand[6], 0, angleToPulse(180));
+  delay(500);
+  for (int i = 8; i <= 11; i++) {
+    pwm.setPWM(hand[i], 0, angleToPulse(180));
+    delay(500);
+  }
+}
+
+void closeRightHand(){
+  for (int i = 2; i <= 5; i++) {
+    pwm.setPWM(hand[i], 0, angleToPulse(0));
+    delay(500);
+  }
+  pwm.setPWM(hand[0], 0, angleToPulse(0));
+  pwm.setPWM(hand[1], 0, angleToPulse(0));
+  delay(500);
+}
+
+void closeLeftHand(){
+  for (int i = 8; i <= 11; i++) {
+    pwm.setPWM(hand[i], 0, angleToPulse(0));
+    delay(500);
+  }
+  pwm.setPWM(hand[6], 0, angleToPulse(0));
+  pwm.setPWM(hand[7], 0, angleToPulse(0));
+  delay(500);
+}
+
+/* ================= HANDSHAKE ================= */
+
+void handshakeRight() {
+  // 1. Switch to arm mode context
+  currentMode = 'V';
+
+  // 2. Raise right arm to handshake position
+  // Target: shoulder out, elbow bent, wrist neutral
+  int targetRS = 120;  // shoulder up
+  int targetRU = 90;   // upper arm forward
+  int targetRE = 90;   // elbow bent
+  int targetRW = 90;   // wrist neutral
+
+  // Move smoothly in 10-degree steps
+  while (rsAngle != targetRS || ruAngle != targetRU ||
+         reAngle != targetRE || rwAngle != targetRW) {
+    if (rsAngle < targetRS) { rsAngle += 5; RS.write(rsAngle); }
+    else if (rsAngle > targetRS) { rsAngle -= 5; RS.write(rsAngle); }
+
+    if (ruAngle < targetRU) { ruAngle += 5; RU.write(ruAngle); }
+    else if (ruAngle > targetRU) { ruAngle -= 5; RU.write(ruAngle); }
+
+    if (reAngle < targetRE) { reAngle += 5; RE.write(reAngle); }
+    else if (reAngle > targetRE) { reAngle -= 5; RE.write(reAngle); }
+
+    if (rwAngle < targetRW) { rwAngle += 5; RW.write(rwAngle); }
+    else if (rwAngle > targetRW) { rwAngle -= 5; RW.write(rwAngle); }
+
+    delay(40);
+  }
+
+  // 3. Open right hand
+  currentMode = 'N';
+  openRightHand();
+
+  // 4. Shake wrist 3 times
+  currentMode = 'V';
+  for (int i = 0; i < 3; i++) {
+    increaseArm(&rwAngle, RW, 0, 180);
+    increaseArm(&rwAngle, RW, 0, 180);
+    delay(200);
+    decreaseArm(&rwAngle, RW, 0, 180);
+    decreaseArm(&rwAngle, RW, 0, 180);
+    delay(200);
+  }
+
+  // 5. Return to neutral
+  rwAngle = 90;  RW.write(rwAngle);
+  reAngle = 150; RE.write(reAngle);
+  ruAngle = 70;  RU.write(ruAngle);
+  rsAngle = 90;  RS.write(rsAngle);
+  raAngle = 90;  RA.write(raAngle);
+}
+
+void handshakeLeft() {
+  currentMode = 'V';
+
+  int targetLS = 60;
+  int targetLU = 90;
+  int targetLE = 90;
+  int targetLW = 90;
+
+  while (lsAngle != targetLS || luAngle != targetLU ||
+         leAngle != targetLE || lwAngle != targetLW) {
+    if (lsAngle < targetLS) { lsAngle += 5; LS.write(lsAngle); }
+    else if (lsAngle > targetLS) { lsAngle -= 5; LS.write(lsAngle); }
+
+    if (luAngle < targetLU) { luAngle += 5; LU.write(luAngle); }
+    else if (luAngle > targetLU) { luAngle -= 5; LU.write(luAngle); }
+
+    if (leAngle < targetLE) { leAngle += 5; LE.write(leAngle); }
+    else if (leAngle > targetLE) { leAngle -= 5; LE.write(leAngle); }
+
+    if (lwAngle < targetLW) { lwAngle += 5; LW.write(lwAngle); }
+    else if (lwAngle > targetLW) { lwAngle -= 5; LW.write(lwAngle); }
+
+    delay(40);
+  }
+
+  currentMode = 'N';
+  openLeftHand();
+
+  currentMode = 'V';
+  for (int i = 0; i < 3; i++) {
+    increaseArm(&lwAngle, LW, 0, 180);
+    increaseArm(&lwAngle, LW, 0, 180);
+    delay(200);
+    decreaseArm(&lwAngle, LW, 0, 180);
+    decreaseArm(&lwAngle, LW, 0, 180);
+    delay(200);
+  }
+
+  lwAngle = 90;  LW.write(lwAngle);
+  leAngle = 10;  LE.write(leAngle);
+  luAngle = 90;  LU.write(luAngle);
+  lsAngle = 90;  LS.write(lsAngle);
+  laAngle = 90;  LA.write(laAngle);
+}
+
+/* ================= INIT ================= */
+
+void init_pos(){
+  RW.write(90); RE.write(150); RU.write(70); RS.write(90); RA.write(90);
+  LW.write(90); LE.write(10); LU.write(90); LS.write(90); LA.write(90);
+  openRightHand();
+  openLeftHand();
+  delay(2000);
+}
+
+// Read the input angle and generate PWM output
+int angleToPulse (int ang){
+  int pulse = map(ang, 0, 180, SERVOMIN, SERVOMAX);
+  return pulse;
+}
+
+// Exit program control
+void exitProgram() {
+  Serial.println("Exiting...");
+  exit(0);
+}
+
